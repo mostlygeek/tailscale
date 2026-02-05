@@ -93,6 +93,19 @@ type Server struct {
 	// `Dir/tailscaled.log.conf`.
 	Store ipn.StateStore
 
+	// CertStore, if non-nil, specifies a shared certificate store for
+	// TLS certificates and ACME account keys. When multiple Server
+	// instances run on the same IP, sharing a CertStore allows them to
+	// share a single ACME account, avoiding Let's Encrypt rate limits
+	// on new account registrations.
+	//
+	// If nil, each Server creates its own certificate store in its
+	// state directory.
+	//
+	// Use ipnlocal.NewCertFileStore to create a file-backed store
+	// that can be shared across multiple Server instances.
+	CertStore ipnlocal.CertStore
+
 	// Hostname is the hostname to present to the control server.
 	// If empty, the binary name is used.
 	Hostname string
@@ -751,6 +764,9 @@ func (s *Server) start() (reterr error) {
 	}
 	lb.SetTCPHandlerForFunnelFlow(s.getTCPHandlerForFunnelFlow)
 	lb.SetVarRoot(s.rootPath)
+	if s.CertStore != nil {
+		lb.SetCertStore(s.CertStore)
+	}
 	s.logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
 	if err := ns.Start(lb); err != nil {

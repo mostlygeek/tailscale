@@ -192,7 +192,7 @@ func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string
 
 // shouldStartDomainRenewal reports whether the domain's cert should be renewed
 // based on the current time, the cert's expiry, and the ARI check.
-func (b *LocalBackend) shouldStartDomainRenewal(cs certStore, domain string, now time.Time, pair *TLSCertKeyPair, minValidity time.Duration) (bool, error) {
+func (b *LocalBackend) shouldStartDomainRenewal(cs CertStore, domain string, now time.Time, pair *TLSCertKeyPair, minValidity time.Duration) (bool, error) {
 	if minValidity != 0 {
 		cert, err := pair.parseCertificate()
 		if err != nil {
@@ -246,7 +246,7 @@ func (b *LocalBackend) domainRenewalTimeByExpiry(pair *TLSCertKeyPair) (time.Tim
 	return renewAt, nil
 }
 
-func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair) (time.Time, error) {
+func (b *LocalBackend) domainRenewalTimeByARI(cs CertStore, pair *TLSCertKeyPair) (time.Time, error) {
 	var blocks []*pem.Block
 	rest := pair.CertPEM
 	for len(rest) > 0 {
@@ -282,10 +282,10 @@ func (b *LocalBackend) domainRenewalTimeByARI(cs certStore, pair *TLSCertKeyPair
 	return renewTime, nil
 }
 
-// certStore provides a way to perist and retrieve TLS certificates.
+// CertStore provides a way to persist and retrieve TLS certificates.
 // As of 2023-02-01, we use store certs in directories on disk everywhere
 // except on Kubernetes, where we use the state store.
-type certStore interface {
+type CertStore interface {
 	// Read returns the cert and key for domain, if they exist and are valid
 	// for now. If they're expired, it returns errCertExpired.
 	// If they don't exist, it returns ipn.ErrStateNotExist.
@@ -303,7 +303,10 @@ var errCertExpired = errors.New("cert expired")
 
 var testX509Roots *x509.CertPool // set non-nil by tests
 
-func (b *LocalBackend) getCertStore() (certStore, error) {
+func (b *LocalBackend) getCertStore() (CertStore, error) {
+	if b.certStoreOverride != nil {
+		return b.certStoreOverride, nil
+	}
 	switch b.store.(type) {
 	case *store.FileStore:
 	case *mem.Store:
@@ -335,13 +338,24 @@ func (b *LocalBackend) ConfigureCertsForTest(getCert func(hostname string) (*TLS
 	b.mu.Unlock()
 }
 
-// certFileStore implements certStore by storing the cert & key files in the named directory.
+// certFileStore implements CertStore by storing the cert & key files in the named directory.
 type certFileStore struct {
 	dir string
 
 	// This field allows a test to override the CA root(s) for certificate
 	// verification. If nil the default system pool is used.
 	testRoots *x509.CertPool
+}
+
+// NewCertFileStore returns a CertStore backed by files in dir.
+// The directory is created if it does not exist.
+// This can be used to create a shared cert store for multiple
+// LocalBackend instances, allowing them to share a single ACME account.
+func NewCertFileStore(dir string) (CertStore, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	return certFileStore{dir: dir}, nil
 }
 
 const acmePEMName = "acme-account.key.pem"
@@ -509,7 +523,7 @@ func certFile(dir, domain string) string { return filepath.Join(dir, domain+".cr
 //
 // If the keypair is expired, it returns errCertExpired.
 // If the keypair doesn't exist, it returns ipn.ErrStateNotExist.
-func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKeyPair, err error) {
+func getCertPEMCached(cs CertStore, domain string, now time.Time) (p *TLSCertKeyPair, err error) {
 	if !validLookingCertDomain(domain) {
 		// Before we read files from disk using it, validate it's halfway
 		// reasonable looking.
@@ -521,7 +535,7 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 // getCertPem checks if a cert needs to be renewed and if so, renews it.
 // domain is the resolved cert domain (e.g., "*.node.ts.net" for wildcards).
 // It can be overridden in tests.
-var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+var getCertPEM = func(ctx context.Context, b *LocalBackend, cs CertStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
@@ -760,7 +774,7 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 	return nil, errors.New("acme/autocert: failed to parse private key")
 }
 
-func acmeKey(cs certStore) (crypto.Signer, error) {
+func acmeKey(cs CertStore) (crypto.Signer, error) {
 	if v, err := cs.ACMEKey(); err == nil {
 		priv, _ := pem.Decode(v)
 		if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
@@ -785,7 +799,7 @@ func acmeKey(cs certStore) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-func acmeClient(cs certStore) (*acme.Client, error) {
+func acmeClient(cs CertStore) (*acme.Client, error) {
 	key, err := acmeKey(cs)
 	if err != nil {
 		return nil, fmt.Errorf("acmeKey: %w", err)
