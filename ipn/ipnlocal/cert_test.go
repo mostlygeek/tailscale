@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -284,7 +285,7 @@ func TestCertStoreRoundTrip(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		store        certStore
+		store        CertStore
 		debugACMEURL bool
 	}{
 		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}, false},
@@ -550,7 +551,7 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 			// Set to true if get getCertPEM is called. GetCertPEM can be called in a goroutine for async
 			// renewal or in the main goroutine if issuance is required to obtain valid TLS credentials.
 			getCertPemWasCalled := false
-			getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+			getCertPEM = func(ctx context.Context, b *LocalBackend, cs CertStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
 				getCertPemWasCalled = true
 				return nil, nil
 			}
@@ -579,5 +580,57 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 				t.Errorf("wants getCertPem to be called: %v, got called %v", tt.wantIssuance, gotIssuance)
 			}
 		})
+	}
+}
+
+func TestSharedCertStore(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := NewCertFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewCertFileStore: %v", err)
+	}
+
+	// Write an ACME key via the shared store.
+	key1, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	var pemBuf bytes.Buffer
+	if err := encodeECDSAKey(&pemBuf, key1); err != nil {
+		t.Fatalf("encodeECDSAKey: %v", err)
+	}
+	keyPEM := pemBuf.Bytes()
+	if err := cs.WriteACMEKey(keyPEM); err != nil {
+		t.Fatalf("WriteACMEKey: %v", err)
+	}
+
+	// Two backends sharing the same store should see the same ACME key.
+	b1 := new(LocalBackend)
+	b1.SetCertStore(cs)
+	b2 := new(LocalBackend)
+	b2.SetCertStore(cs)
+
+	cs1, err := b1.getCertStore()
+	if err != nil {
+		t.Fatalf("b1.getCertStore: %v", err)
+	}
+	cs2, err := b2.getCertStore()
+	if err != nil {
+		t.Fatalf("b2.getCertStore: %v", err)
+	}
+
+	got1, err := cs1.ACMEKey()
+	if err != nil {
+		t.Fatalf("cs1.ACMEKey: %v", err)
+	}
+	got2, err := cs2.ACMEKey()
+	if err != nil {
+		t.Fatalf("cs2.ACMEKey: %v", err)
+	}
+	if !bytes.Equal(got1, got2) {
+		t.Errorf("ACME keys differ between backends sharing the same store")
+	}
+	if !bytes.Equal(got1, keyPEM) {
+		t.Errorf("ACME key doesn't match what was written")
 	}
 }

@@ -203,6 +203,7 @@ type LocalBackend struct {
 	backendLogID             logid.PublicID // or zero value if logging not in use
 	unregisterSysPolicyWatch func()
 	varRoot                  string         // or empty if SetVarRoot never called
+	certStoreOverride        CertStore      // or nil; if set, used instead of auto-detected cert store
 	logFlushFunc             func()         // or nil if SetLogFlusher wasn't called
 	em                       *expiryManager // non-nil; TODO(nickkhyl): move to nodeBackend
 	sshAtomicBool            atomic.Bool    // TODO(nickkhyl): move to nodeBackend
@@ -5211,6 +5212,15 @@ func (b *LocalBackend) SetTCPHandlerForFunnelFlow(h func(src netip.AddrPort, dst
 // It should only be called before the LocalBackend is used.
 func (b *LocalBackend) SetVarRoot(dir string) {
 	b.varRoot = dir
+}
+
+// SetCertStore sets an explicit CertStore for TLS certificate storage
+// and ACME account key management. This allows multiple LocalBackend
+// instances to share a single ACME account, avoiding rate limits.
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetCertStore(cs CertStore) {
+	b.certStoreOverride = cs
 }
 
 // SetLogFlusher sets a func to be called to flush log uploads.
