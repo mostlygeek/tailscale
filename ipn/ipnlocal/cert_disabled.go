@@ -29,13 +29,13 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 
 var errCertExpired = errors.New("cert expired")
 
-type certStore interface{}
+type CertStore interface{}
 
-func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKeyPair, err error) {
+func getCertPEMCached(cs CertStore, domain string, now time.Time) (p *TLSCertKeyPair, err error) {
 	return nil, errNoCerts
 }
 
-func (b *LocalBackend) getCertStore() (certStore, error) {
+func (b *LocalBackend) getCertStore() (CertStore, error) {
 	return nil, errNoCerts
 }
 
